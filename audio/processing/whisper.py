@@ -76,8 +76,8 @@ class WhisperEngine(TranscriptionEngine):
         compute_type: str = "int8",
         sample_rate: int = 16000,
         channels: int = 1,
-        target_window_seconds: float = 4.0,
-        min_duration_seconds: float = 1.5,
+        target_window_seconds: float = 3.0,
+        min_duration_seconds: float = 1.0,
         overlap_seconds: float = 0.5,
         language: Optional[str] = None,
     ) -> None:
