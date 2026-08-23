@@ -1,25 +1,37 @@
 """
-faster-whisper backed TranscriptionEngine implementation for Meetly.
+Low-latency Whisper transcription engine for Meetly.
 
-Provides near-real-time transcription of short, streamed AudioChunk
-objects by buffering audio per source into rolling inference windows
-before running Whisper, since a single microphone chunk (commonly
-~64 ms) is far too short to transcribe usefully on its own.
+This module receives short AudioChunk objects and continuously
+produces partial transcript hypotheses from a rolling audio context.
+
+The engine intentionally keeps the faster-whisper model behind the
+TranscriptionEngine abstraction so the recorder and meeting layers
+remain independent of the speech-to-text provider.
+
+Timestamp convention
+--------------------
+Transcript timestamps are measured in seconds elapsed from the
+beginning of each audio source/session.
+
+They are NOT Unix timestamps.
+
+This allows the transcription and diarization pipelines to share the
+same timeline later.
 """
 
 from __future__ import annotations
 
 import asyncio
-import difflib
 import logging
-from collections import deque
 from dataclasses import dataclass, field
 from typing import Deque, Dict, List, Optional, Tuple
+from collections import deque
 
 from ..recorder.models import AudioChunk, AudioFormat, TranscriptChunk
 from .transcriber import TranscriptionEngine, TranscriptionError
 
 logger = logging.getLogger(__name__)
+
 
 _BYTES_PER_SAMPLE = {
     AudioFormat.PCM16: 2,
@@ -27,45 +39,70 @@ _BYTES_PER_SAMPLE = {
 
 
 class ModelInitializationError(TranscriptionError):
-    """Raised when the Whisper model fails to load."""
+    """Raised when the Whisper model cannot be initialized."""
 
 
 class InvalidAudioFormatError(TranscriptionError):
-    """Raised when an AudioChunk's format is not supported by this engine."""
+    """Raised when incoming audio does not match the engine configuration."""
 
 
 class TranscriptionFailedError(TranscriptionError):
-    """Raised when Whisper inference fails for a buffered audio window."""
+    """Raised when Whisper inference fails."""
 
 
 @dataclass
 class _SourceBuffer:
-    """Rolling audio buffer and dedup state kept per ``audio.source``."""
+    """
+    Runtime state for one audio source.
+
+    The buffer keeps enough recent audio to repeatedly generate
+    transcription hypotheses while preserving a small amount of
+    context between inference calls.
+    """
 
     chunks: Deque[bytes] = field(default_factory=deque)
     buffered_bytes: int = 0
-    window_start_time: Optional[float] = None
-    last_tail_words: List[str] = field(default_factory=list)
+
+    timeline_start: Optional[float] = None
+    total_audio_seconds: float = 0.0
+
+    last_text: str = ""
+    last_final_text: str = ""
+
+    # Text which has remained stable across multiple inference passes.
+    stable_text: str = ""
+
+    # Number of consecutive inference passes in which the current
+    # hypothesis remained unchanged.
+    stable_passes: int = 0
 
 
 class WhisperEngine(TranscriptionEngine):
     """
-    ``TranscriptionEngine`` implementation backed by faster-whisper.
+    faster-whisper based low-latency transcription engine.
 
-    Incoming ``AudioChunk`` objects are accumulated per ``audio.source``
-    into a rolling window (``target_window_seconds``). Inference only
-    runs once a window is full and at least ``min_duration_seconds`` of
-    audio has been buffered; smaller amounts are held and ``None`` is
-    returned. A configurable ``overlap_seconds`` of trailing audio is
-    carried into the next window so words are not cut off at window
-    boundaries, and a word-level dedup step strips text that overlaps
-    with the previous window's tail so overlapping windows do not
-    repeat text.
+    Unlike the previous implementation, this engine does not wait for
+    a fixed 3-second window before producing a result.
 
-    The model is loaded once (lazily, on first use, or explicitly via
-    :meth:`initialize`) and inference is serialized behind a lock,
-    since the underlying faster-whisper model is not safe for
-    concurrent use from multiple threads.
+    Instead:
+
+        AudioChunk
+            ↓
+        rolling buffer
+            ↓
+        short inference window
+            ↓
+        partial TranscriptChunk
+            ↓
+        updated partial hypothesis
+            ↓
+        final/stable transcript chunks
+
+    The engine still uses a small amount of context because Whisper
+    cannot reliably recognize an individual ~64 ms microphone chunk.
+
+    Partial results should be treated as replaceable hypotheses by the
+    consumer. Final results can be committed permanently.
     """
 
     def __init__(
@@ -76,78 +113,136 @@ class WhisperEngine(TranscriptionEngine):
         compute_type: str = "int8",
         sample_rate: int = 16000,
         channels: int = 1,
-        target_window_seconds: float = 3.0,
-        min_duration_seconds: float = 1.0,
-        overlap_seconds: float = 0.5,
+        inference_window_seconds: float = 1.0,
+        minimum_audio_seconds: float = 0.4,
+        context_seconds: float = 2.0,
+        inference_interval_seconds: float = 0.25,
         language: Optional[str] = None,
+        stability_passes: int = 2,
     ) -> None:
         """
-        Configure a Whisper transcription engine.
+        Configure the Whisper engine.
 
         Args:
-            model_size: faster-whisper model name/size (e.g. "base", "small").
-            device: Inference device, e.g. "cpu" or "cuda".
-            compute_type: faster-whisper compute type (e.g. "int8", "float16").
-            sample_rate: Expected sample rate, in Hz, of incoming audio.
-            channels: Expected channel count of incoming audio.
-            target_window_seconds: Audio duration accumulated per inference window.
-            min_duration_seconds: Minimum buffered duration required before
-                a completed window is actually sent to Whisper.
-            overlap_seconds: Trailing audio carried from one window into the next.
-            language: Optional forced language code; auto-detected if None.
+            model_size:
+                faster-whisper model name, for example "base".
 
-        Raises:
-            ValueError: If a rate/channel/duration argument is not positive,
-                or if ``overlap_seconds`` is not smaller than ``target_window_seconds``.
+            device:
+                Inference device, normally "cpu" or "cuda".
+
+            compute_type:
+                faster-whisper compute type, for example "int8".
+
+            sample_rate:
+                Expected input sample rate.
+
+            channels:
+                Expected input channel count.
+
+            inference_window_seconds:
+                Minimum amount of recent audio used for an inference
+                pass.
+
+            minimum_audio_seconds:
+                Minimum audio required before the first inference.
+
+            context_seconds:
+                Maximum recent audio retained as context.
+
+            inference_interval_seconds:
+                Minimum elapsed audio time between inference passes.
+
+            language:
+                Optional forced language code.
+
+            stability_passes:
+                Number of identical consecutive hypotheses required
+                before text is considered stable enough to finalize.
         """
-        if sample_rate <= 0 or channels <= 0:
-            raise ValueError("sample_rate and channels must be positive.")
-        if target_window_seconds <= 0 or min_duration_seconds <= 0:
-            raise ValueError("Window durations must be positive.")
-        if overlap_seconds < 0 or overlap_seconds >= target_window_seconds:
+
+        if sample_rate <= 0:
+            raise ValueError("sample_rate must be positive.")
+
+        if channels <= 0:
+            raise ValueError("channels must be positive.")
+
+        if inference_window_seconds <= 0:
             raise ValueError(
-                "overlap_seconds must be >= 0 and < target_window_seconds."
+                "inference_window_seconds must be positive."
+            )
+
+        if minimum_audio_seconds <= 0:
+            raise ValueError(
+                "minimum_audio_seconds must be positive."
+            )
+
+        if context_seconds < inference_window_seconds:
+            raise ValueError(
+                "context_seconds must be >= inference_window_seconds."
+            )
+
+        if inference_interval_seconds <= 0:
+            raise ValueError(
+                "inference_interval_seconds must be positive."
+            )
+
+        if stability_passes <= 0:
+            raise ValueError(
+                "stability_passes must be positive."
             )
 
         self._model_size = model_size
         self._device = device
         self._compute_type = compute_type
+
         self._sample_rate = sample_rate
         self._channels = channels
-        self._target_window_seconds = target_window_seconds
-        self._min_duration_seconds = min_duration_seconds
-        self._overlap_seconds = overlap_seconds
+
+        self._inference_window_seconds = inference_window_seconds
+        self._minimum_audio_seconds = minimum_audio_seconds
+        self._context_seconds = context_seconds
+        self._inference_interval_seconds = inference_interval_seconds
+
         self._language = language
+        self._stability_passes = stability_passes
 
         self._bytes_per_sample = _BYTES_PER_SAMPLE[AudioFormat.PCM16]
+
         self._bytes_per_second = (
-            self._sample_rate * self._channels * self._bytes_per_sample
+            self._sample_rate
+            * self._channels
+            * self._bytes_per_sample
         )
 
         self._model = None
+
         self._init_lock = asyncio.Lock()
         self._inference_lock = asyncio.Lock()
+
         self._buffers: Dict[str, _SourceBuffer] = {}
+
+    # ------------------------------------------------------------------
+    # Model lifecycle
+    # ------------------------------------------------------------------
 
     async def initialize(self) -> None:
         """
-        Load the Whisper model, if it has not been loaded already.
+        Load faster-whisper exactly once.
 
-        Safe to call concurrently or more than once; the model is
-        loaded exactly once. Called automatically on first use of
-        :meth:`transcribe` if not called explicitly beforehand.
-
-        Raises:
-            ModelInitializationError: If the model fails to load.
+        Safe to call multiple times.
         """
+
         if self._model is not None:
             return
 
         async with self._init_lock:
+
             if self._model is not None:
                 return
+
             try:
                 from faster_whisper import WhisperModel
+
             except ImportError as exc:
                 raise ModelInitializationError(
                     "faster-whisper is not installed. "
@@ -161,170 +256,364 @@ class WhisperEngine(TranscriptionEngine):
                     device=self._device,
                     compute_type=self._compute_type,
                 )
+
             except Exception as exc:
                 raise ModelInitializationError(
-                    f"Failed to load Whisper model '{self._model_size}': {exc}"
+                    f"Failed to load Whisper model "
+                    f"'{self._model_size}': {exc}"
                 ) from exc
 
             logger.info(
-                "Whisper model '%s' loaded (device=%s, compute_type=%s).",
+                "Whisper model '%s' loaded "
+                "(device=%s, compute_type=%s).",
                 self._model_size,
                 self._device,
                 self._compute_type,
             )
 
-    async def transcribe(self, audio: AudioChunk) -> Optional[TranscriptChunk]:
+    # ------------------------------------------------------------------
+    # Public transcription API
+    # ------------------------------------------------------------------
+
+    async def transcribe(
+        self,
+        audio: AudioChunk,
+    ) -> Optional[TranscriptChunk]:
         """
-        Buffer ``audio`` and, once its source has accumulated a full
-        window, run Whisper inference on that window.
+        Consume one AudioChunk and produce the latest transcript
+        hypothesis when enough new audio is available.
 
-        Args:
-            audio: A short raw audio chunk.
+        The returned TranscriptChunk is normally partial
+        (is_final=False).
 
-        Returns:
-            A TranscriptChunk if a window was completed and produced
-            usable (non-empty, non-duplicate) text, otherwise None.
-
-        Raises:
-            InvalidAudioFormatError: If the chunk's format, sample rate,
-                or channel count is unsupported.
-            ModelInitializationError: If the model has not loaded and
-                fails to load on demand.
-            TranscriptionFailedError: If inference itself fails.
+        Stable text may be marked final when the same hypothesis
+        remains unchanged across multiple inference passes.
         """
-        self._validate_format(audio)
+
+        self._validate_audio(audio)
 
         if self._model is None:
             await self.initialize()
 
-        buf = self._buffers.setdefault(audio.source, _SourceBuffer())
-        if buf.window_start_time is None:
-            buf.window_start_time = audio.timestamp.timestamp()
+        buffer = self._buffers.setdefault(
+            audio.source,
+            _SourceBuffer(),
+        )
 
-        buf.chunks.append(audio.data)
-        buf.buffered_bytes += len(audio.data)
-        duration = buf.buffered_bytes / self._bytes_per_second
+        if buffer.timeline_start is None:
+            buffer.timeline_start = 0.0
 
-        if duration < self._target_window_seconds:
+        buffer.chunks.append(audio.data)
+        buffer.buffered_bytes += len(audio.data)
+
+        chunk_duration = (
+            len(audio.data) / self._bytes_per_second
+        )
+
+        buffer.total_audio_seconds += chunk_duration
+
+        buffered_duration = (
+            buffer.buffered_bytes / self._bytes_per_second
+        )
+
+        if buffered_duration < self._minimum_audio_seconds:
             return None
 
-        window_bytes = b"".join(buf.chunks)
-        window_start = buf.window_start_time
-        window_duration = len(window_bytes) / self._bytes_per_second
-
-        self._carry_overlap(buf, window_bytes, window_start, window_duration)
-
-        if window_duration < self._min_duration_seconds:
+        # Do not run Whisper on every tiny microphone callback.
+        # This prevents excessive CPU usage.
+        if (
+            buffer.last_text
+            and (
+                buffer.total_audio_seconds
+                - self._last_inference_time(buffer)
+                < self._inference_interval_seconds
+            )
+        ):
             return None
+
+        window_bytes, window_start, window_duration = (
+            self._build_inference_window(buffer)
+        )
 
         try:
-            text, confidence = await self._run_inference(window_bytes)
+            text, confidence = await self._run_inference(
+                window_bytes
+            )
+
         except Exception as exc:
+            logger.exception(
+                "Whisper inference failed for source '%s'.",
+                audio.source,
+            )
+
+            # IMPORTANT:
+            # Do not destroy the buffered audio when inference fails.
             raise TranscriptionFailedError(
-                f"Whisper inference failed for source '{audio.source}': {exc}"
+                f"Whisper inference failed for "
+                f"source '{audio.source}': {exc}"
             ) from exc
 
-        text = self._dedupe_overlap(buf, text)
+        text = text.strip()
+
         if not text:
             return None
+
+        previous_text = buffer.last_text
+
+        buffer.last_text = text
+
+        # Track stability.
+        if text == previous_text:
+            buffer.stable_passes += 1
+        else:
+            buffer.stable_passes = 0
+
+        is_final = (
+            buffer.stable_passes >= self._stability_passes
+        )
+
+        if is_final:
+            final_text = self._extract_new_final_text(
+                buffer,
+                text,
+            )
+
+            if not final_text:
+                return None
+
+            buffer.last_final_text = text
+            buffer.stable_text = text
+
+            return TranscriptChunk(
+                text=final_text,
+                start_time=window_start,
+                end_time=window_start + window_duration,
+                confidence=confidence,
+                is_final=True,
+            )
 
         return TranscriptChunk(
             text=text,
             start_time=window_start,
             end_time=window_start + window_duration,
             confidence=confidence,
-            is_final=True,
+            is_final=False,
         )
 
-    def _carry_overlap(
+    # ------------------------------------------------------------------
+    # Buffer handling
+    # ------------------------------------------------------------------
+
+    def _build_inference_window(
         self,
-        buf: _SourceBuffer,
-        window_bytes: bytes,
-        window_start: float,
-        window_duration: float,
+        buffer: _SourceBuffer,
+    ) -> Tuple[bytes, float, float]:
+        """
+        Build a bounded rolling inference window.
+
+        The most recent context is preferred so that the latest speech
+        is reflected in the partial hypothesis.
+        """
+
+        max_bytes = int(
+            self._context_seconds
+            * self._bytes_per_second
+        )
+
+        current = b"".join(buffer.chunks)
+
+        if len(current) > max_bytes:
+            current = current[-max_bytes:]
+
+        duration = (
+            len(current) / self._bytes_per_second
+        )
+
+        start = max(
+            0.0,
+            buffer.total_audio_seconds - duration,
+        )
+
+        return current, start, duration
+
+    def _last_inference_time(
+        self,
+        buffer: _SourceBuffer,
+    ) -> float:
+        """
+        Approximate the audio position represented by the previous
+        inference.
+
+        The current rolling hypothesis itself serves as the marker.
+        """
+
+        if not buffer.last_text:
+            return 0.0
+
+        return max(
+            0.0,
+            buffer.total_audio_seconds
+            - self._context_seconds,
+        )
+
+    def _extract_new_final_text(
+        self,
+        buffer: _SourceBuffer,
+        text: str,
+    ) -> str:
+        """
+        Return only text that has not already been committed.
+
+        This prevents stable hypotheses from being permanently
+        duplicated in the final transcript.
+        """
+
+        if not buffer.last_final_text:
+            return text
+
+        old_words = buffer.last_final_text.split()
+        new_words = text.split()
+
+        common = 0
+
+        max_overlap = min(
+            len(old_words),
+            len(new_words),
+        )
+
+        for size in range(max_overlap, 0, -1):
+
+            if old_words[-size:] == new_words[:size]:
+                common = size
+                break
+
+        if common:
+            new_words = new_words[common:]
+
+        return " ".join(new_words).strip()
+
+    # ------------------------------------------------------------------
+    # Audio validation
+    # ------------------------------------------------------------------
+
+    def _validate_audio(
+        self,
+        audio: AudioChunk,
     ) -> None:
-        """Reset ``buf`` to hold only the trailing overlap audio (if any)
-        so it forms the start of the next window."""
-        overlap_bytes = int(self._overlap_seconds * self._bytes_per_second)
-        overlap_bytes -= overlap_bytes % self._bytes_per_sample
+        """Validate incoming audio against engine configuration."""
 
-        if 0 < overlap_bytes < len(window_bytes):
-            retained = window_bytes[-overlap_bytes:]
-            buf.chunks = deque([retained])
-            buf.buffered_bytes = len(retained)
-            buf.window_start_time = window_start + (
-                window_duration - (len(retained) / self._bytes_per_second)
-            )
-        else:
-            buf.chunks = deque()
-            buf.buffered_bytes = 0
-            buf.window_start_time = None
-
-    def _validate_format(self, audio: AudioChunk) -> None:
-        """Validate that an incoming chunk matches the supported format."""
         if audio.format != AudioFormat.PCM16:
             raise InvalidAudioFormatError(
-                f"Unsupported audio format '{audio.format}'; only PCM16 is supported."
+                f"Unsupported audio format '{audio.format}'. "
+                "Only PCM16 is supported."
             )
+
         if audio.sample_rate != self._sample_rate:
             raise InvalidAudioFormatError(
-                f"Unsupported sample rate {audio.sample_rate}; "
+                f"Unsupported sample rate "
+                f"{audio.sample_rate}; "
                 f"expected {self._sample_rate}."
             )
+
         if audio.channels != self._channels:
             raise InvalidAudioFormatError(
-                f"Unsupported channel count {audio.channels}; "
+                f"Unsupported channel count "
+                f"{audio.channels}; "
                 f"expected {self._channels}."
             )
 
-    async def _run_inference(self, pcm_bytes: bytes) -> Tuple[str, Optional[float]]:
+    # ------------------------------------------------------------------
+    # Whisper inference
+    # ------------------------------------------------------------------
+
+    async def _run_inference(
+        self,
+        pcm_bytes: bytes,
+    ) -> Tuple[str, Optional[float]]:
         """
-        Convert PCM16 bytes to normalized float32 samples and run
-        blocking Whisper inference in a worker thread, serialized
-        behind a lock since the model is not thread-safe.
+        Convert PCM16 audio to float32 and run faster-whisper
+        outside the asyncio event loop.
         """
+
         import numpy as np
 
         samples = (
-            np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+            np.frombuffer(
+                pcm_bytes,
+                dtype=np.int16,
+            )
+            .astype(np.float32)
+            / 32768.0
         )
 
         async with self._inference_lock:
+
             segments, _info = await asyncio.to_thread(
                 self._model.transcribe,
                 samples,
                 language=self._language,
+                vad_filter=True,
+                condition_on_previous_text=True,
             )
+
             segments = list(segments)
 
-        text = " ".join(segment.text.strip() for segment in segments).strip()
-        confidences = [
-            segment.avg_logprob
-            for segment in segments
-            if segment.avg_logprob is not None
-        ]
-        confidence = sum(confidences) / len(confidences) if confidences else None
+        texts = []
+
+        confidences = []
+
+        for segment in segments:
+
+            segment_text = segment.text.strip()
+
+            if segment_text:
+                texts.append(segment_text)
+
+            if segment.avg_logprob is not None:
+                # faster-whisper avg_logprob is not already a
+                # [0, 1] confidence value. We deliberately don't
+                # expose it as confidence.
+                pass
+
+        text = " ".join(texts).strip()
+
+        # We cannot honestly convert avg_logprob into a calibrated
+        # confidence score. Keep this None rather than exposing a
+        # misleading number.
+        confidence = None
+
         return text, confidence
 
-    def _dedupe_overlap(self, buf: _SourceBuffer, text: str) -> str:
-        """
-        Strip words from the start of ``text`` that duplicate the tail
-        of the previously emitted text for this source, compensating
-        for re-transcribing the retained overlap audio.
-        """
-        words = text.split()
-        if not words:
-            return ""
+    # ------------------------------------------------------------------
+    # Cleanup
+    # ------------------------------------------------------------------
 
-        if buf.last_tail_words:
-            matcher = difflib.SequenceMatcher(
-                None, buf.last_tail_words, words, autojunk=False
-            )
-            match = matcher.find_longest_match(
-                0, len(buf.last_tail_words), 0, len(words)
-            )
-            if match.b == 0 and match.size > 0:
-                words = words[match.size :]
+    def reset_source(
+        self,
+        source: str,
+    ) -> None:
+        """
+        Clear all transcription state for one audio source.
 
-        buf.last_tail_words = text.split()[-10:]
-        return " ".join(words)
+        Call this when a meeting/source ends so the next meeting
+        starts from a clean timeline.
+        """
+
+        self._buffers.pop(source, None)
+
+    def reset(self) -> None:
+        """
+        Clear all source buffers.
+
+        This does not unload the Whisper model.
+        """
+
+        self._buffers.clear()
+
+
+__all__ = [
+    "WhisperEngine",
+    "ModelInitializationError",
+    "InvalidAudioFormatError",
+    "TranscriptionFailedError",
+]

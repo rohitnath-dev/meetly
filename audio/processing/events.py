@@ -1,5 +1,9 @@
 """
-Events used throughout the audio pipeline.
+Events used throughout the Meetly audio pipeline.
+
+These events provide lightweight notifications for important
+audio-pipeline state changes. They do not perform processing
+themselves.
 """
 
 from __future__ import annotations
@@ -7,14 +11,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from .models import AudioChunk, TranscriptChunk, SpeakerSegment
+from .recorder.models import AudioChunk, TranscriptChunk, SpeakerSegment
 
 
 @dataclass(slots=True)
 class AudioReceived:
-    """
-    Fired when a new audio chunk is received.
-    """
+    """Emitted when a new audio chunk is received."""
 
     chunk: AudioChunk
     timestamp: datetime
@@ -22,9 +24,7 @@ class AudioReceived:
 
 @dataclass(slots=True)
 class TranscriptReceived:
-    """
-    Fired when a transcript is generated.
-    """
+    """Emitted when a transcript result is generated."""
 
     transcript: TranscriptChunk
     timestamp: datetime
@@ -32,9 +32,14 @@ class TranscriptReceived:
 
 @dataclass(slots=True)
 class SpeakerDetected:
-    """
-    Fired when a speaker is identified.
-    """
+    """Emitted when a speaker segment is detected."""
 
     speaker: SpeakerSegment
     timestamp: datetime
+
+
+__all__ = [
+    "AudioReceived",
+    "TranscriptReceived",
+    "SpeakerDetected",
+]

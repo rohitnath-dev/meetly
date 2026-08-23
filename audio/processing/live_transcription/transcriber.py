@@ -1,12 +1,13 @@
 """
-Live audio transcription pipeline for Meetly.
+Live transcription coordinator for Meetly.
 
-This module receives AudioChunk objects from the recorder layer and
-converts them into TranscriptChunk objects.
+This module receives AudioChunk objects from the recorder layer,
+passes them to a TranscriptionEngine, and exposes TranscriptChunk
+results through callbacks and an asynchronous result stream.
 
-The transcription engine itself is intentionally separated from the
-pipeline so that different speech-to-text providers can be plugged in
-later without changing the recorder or meeting logic.
+The coordinator is intentionally independent of the concrete STT
+provider. Whisper, faster-whisper, or another provider can implement
+TranscriptionEngine without changing this layer.
 """
 
 from __future__ import annotations
@@ -14,11 +15,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Callable, List, Optional, Union
+from typing import AsyncIterator, Callable, List, Optional
 
 from ..recorder.models import AudioChunk, TranscriptChunk
 
 logger = logging.getLogger(__name__)
+
 
 ResultCallback = Callable[[TranscriptChunk], None]
 
@@ -28,18 +30,23 @@ class TranscriptionError(RuntimeError):
 
 
 class TranscriberStateError(TranscriptionError):
-    """Raised for invalid Transcriber lifecycle usage (e.g. submit after stop)."""
+    """Raised when the transcriber is used in an invalid state."""
 
 
 class TranscriptionEngine(ABC):
     """
     Abstract interface for a speech-to-text engine.
 
-    Implementations may use:
-        - Whisper
-        - faster-whisper
-        - cloud speech APIs
-        - another local STT model
+    The engine receives audio chunks and returns the latest available
+    transcription hypothesis.
+
+    A returned TranscriptChunk may be:
+
+        is_final=False
+            Current partial/live hypothesis.
+
+        is_final=True
+            Finalized transcript text.
     """
 
     @abstractmethod
@@ -48,15 +55,13 @@ class TranscriptionEngine(ABC):
         audio: AudioChunk,
     ) -> Optional[TranscriptChunk]:
         """
-        Transcribe (or buffer) one audio chunk.
+        Process one audio chunk.
 
-        Args:
-            audio:
-                AudioChunk containing raw audio data.
+        The implementation may buffer audio internally.
 
         Returns:
-            A TranscriptChunk once enough audio has been processed to
-            produce a result, otherwise None (e.g. still buffering).
+            The latest available transcript result, or None when
+            there is not enough new audio to produce one.
         """
         raise NotImplementedError
 
@@ -65,23 +70,25 @@ class Transcriber:
     """
     Coordinates live audio transcription.
 
-    Audio flow:
+    Pipeline:
 
         AudioChunk
-            -> input queue
-            -> TranscriptionEngine
-            -> TranscriptChunk
-            -> result queue -> stream()
-                             -> callbacks
+            ↓
+        input queue
+            ↓
+        TranscriptionEngine
+            ↓
+        TranscriptChunk
+            ↓
+        result queue
+            ↓
+        stream() / callbacks
 
-    Usage:
+    Partial results are intentionally delivered to consumers.
 
-        transcriber = Transcriber(engine=whisper)
-        await transcriber.start()
-        await transcriber.submit(audio_chunk)
-        async for transcript in transcriber.stream():
-            print(transcript.text)
-        await transcriber.stop()
+    Consumers should replace their current partial hypothesis when
+    receiving is_final=False instead of permanently appending it.
+    Final results can be committed to the meeting transcript.
     """
 
     def __init__(
@@ -96,67 +103,103 @@ class Transcriber:
 
         Args:
             engine:
-                Speech-to-text engine used for transcription.
+                Speech-to-text engine.
+
             queue_maxsize:
-                Maximum number of audio chunks waiting for transcription.
-                ``0`` means unbounded.
+                Maximum number of pending audio chunks.
+                0 means unlimited.
+
             result_queue_maxsize:
-                Maximum number of unread TranscriptChunk results buffered
-                for stream() consumers. ``0`` means unbounded.
+                Maximum number of unread transcript results.
+                0 means unlimited.
         """
+
         if queue_maxsize < 0:
-            raise ValueError("queue_maxsize cannot be negative.")
+            raise ValueError(
+                "queue_maxsize cannot be negative."
+            )
+
         if result_queue_maxsize < 0:
-            raise ValueError("result_queue_maxsize cannot be negative.")
+            raise ValueError(
+                "result_queue_maxsize cannot be negative."
+            )
 
         self._engine = engine
 
-        self._queue: "asyncio.Queue[Optional[AudioChunk]]" = asyncio.Queue(
+        self._queue: asyncio.Queue[
+            Optional[AudioChunk]
+        ] = asyncio.Queue(
             maxsize=queue_maxsize
         )
-        self._results: "asyncio.Queue[Optional[TranscriptChunk]]" = asyncio.Queue(
+
+        self._results: asyncio.Queue[
+            Optional[TranscriptChunk]
+        ] = asyncio.Queue(
             maxsize=result_queue_maxsize
         )
 
-        self._task: Optional[asyncio.Task[None]] = None
+        self._task: Optional[
+            asyncio.Task[None]
+        ] = None
+
         self._running = False
-        self._callbacks: List[ResultCallback] = []
+        self._stopping = False
+
+        self._callbacks: List[
+            ResultCallback
+        ] = []
+
+    # ------------------------------------------------------------------
+    # State
+    # ------------------------------------------------------------------
 
     @property
     def running(self) -> bool:
-        """Return whether the transcriber is currently running."""
+        """Return whether the transcription worker is running."""
+
         return self._running
 
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
     async def start(self) -> None:
-        """Start the live transcription worker. Safe to call once; a repeat
-        call while already running is a no-op."""
+        """
+        Start the background transcription worker.
+
+        Calling start() while already running is a no-op.
+        """
+
         if self._running:
-            logger.debug("Transcriber.start() called while already running.")
             return
 
         self._running = True
+        self._stopping = False
+
         self._task = asyncio.create_task(
             self._process_audio(),
             name="meetly-transcription-worker",
         )
+
         logger.info("Transcriber started.")
 
     async def stop(self) -> None:
         """
         Stop the transcription worker gracefully.
 
-        Shutdown policy: no new audio is accepted once stop() begins,
-        but any audio already queued via submit() is processed to
-        completion before the worker exits. Once the worker has
-        drained, stream() consumers are signalled to end via a
-        sentinel value.
+        Already queued audio is processed before the worker exits.
 
-        Idempotent: calling stop() when already stopped is a no-op.
+        Once the worker has completely stopped, the result stream
+        receives a sentinel and terminates.
         """
+
         if not self._running:
             return
 
+        self._stopping = True
         self._running = False
+
+        # Sentinel is processed after everything already in the queue.
         await self._queue.put(None)
 
         if self._task is not None:
@@ -168,114 +211,227 @@ class Transcriber:
                 self._task = None
 
         await self._results.put(None)
+
+        self._stopping = False
+
         logger.info("Transcriber stopped.")
 
-    async def submit(self, audio: AudioChunk) -> None:
-        """
-        Submit an AudioChunk for transcription.
+    # ------------------------------------------------------------------
+    # Input
+    # ------------------------------------------------------------------
 
-        This method does not perform transcription itself; it places
-        the audio into the processing queue for the background worker.
+    async def submit(
+        self,
+        audio: AudioChunk,
+    ) -> None:
+        """
+        Submit an audio chunk for live transcription.
 
         Raises:
-            TranscriberStateError: If the transcriber is not running.
+            TranscriberStateError:
+                If the transcriber is not running.
         """
-        if not self._running:
+
+        if not self._running or self._stopping:
             raise TranscriberStateError(
-                "Cannot submit audio while transcriber is stopped."
+                "Cannot submit audio while "
+                "transcriber is stopped."
             )
+
         await self._queue.put(audio)
 
-    async def transcribe(self, audio: AudioChunk) -> Optional[TranscriptChunk]:
-        """
-        Transcribe one audio chunk immediately, bypassing the input queue.
+    # ------------------------------------------------------------------
+    # Direct transcription
+    # ------------------------------------------------------------------
 
-        The result (if any) is still dispatched to callbacks and pushed
-        onto the result queue so that concurrent stream() consumers see
-        it, keeping this path consistent with submit()/stream().
-
-        Raises:
-            TranscriptionError: If transcription fails.
+    async def transcribe(
+        self,
+        audio: AudioChunk,
+    ) -> Optional[TranscriptChunk]:
         """
+        Process one AudioChunk immediately.
+
+        This bypasses the background input queue but still publishes
+        any resulting TranscriptChunk through callbacks and stream().
+        """
+
         try:
             result = await self._engine.transcribe(audio)
+
+        except asyncio.CancelledError:
+            raise
+
         except Exception as exc:
-            logger.exception("Immediate audio transcription failed.")
-            raise TranscriptionError("Failed to transcribe audio.") from exc
+            logger.exception(
+                "Immediate transcription failed."
+            )
+
+            raise TranscriptionError(
+                "Failed to transcribe audio."
+            ) from exc
 
         if result is not None:
             await self._dispatch_result(result)
+
         return result
 
+    # ------------------------------------------------------------------
+    # Worker
+    # ------------------------------------------------------------------
+
     async def _process_audio(self) -> None:
-        """Continuously consume audio chunks and transcribe them. This is
-        the main live transcription loop."""
+        """
+        Continuously process queued audio chunks.
+
+        Processing is strictly sequential so that audio order is
+        preserved.
+        """
+
         while True:
+
             audio = await self._queue.get()
+
             if audio is None:
                 break
 
             try:
-                result = await self._engine.transcribe(audio)
+                result = await self._engine.transcribe(
+                    audio
+                )
+
                 if result is not None:
-                    await self._dispatch_result(result)
+                    await self._dispatch_result(
+                        result
+                    )
+
             except asyncio.CancelledError:
                 raise
+
             except Exception:
-                logger.exception("Failed to transcribe audio chunk.")
+                # A failed chunk should not kill the entire live
+                # transcription worker.
+                logger.exception(
+                    "Failed to transcribe audio chunk."
+                )
 
-    def add_callback(self, callback: ResultCallback) -> None:
-        """
-        Register a callback for completed transcript chunks.
+    # ------------------------------------------------------------------
+    # Results
+    # ------------------------------------------------------------------
 
-        The callback receives a single TranscriptChunk argument and
-        must be a synchronous, non-blocking callable.
+    def add_callback(
+        self,
+        callback: ResultCallback,
+    ) -> None:
         """
+        Register a callback for transcript results.
+
+        The callback must be synchronous and non-blocking.
+
+        Both partial and final TranscriptChunk objects are delivered.
+        """
+
         if not callable(callback):
-            raise TypeError("callback must be callable.")
-        self._callbacks.append(callback)
+            raise TypeError(
+                "callback must be callable."
+            )
 
-    def remove_callback(self, callback: ResultCallback) -> None:
+        if callback not in self._callbacks:
+            self._callbacks.append(callback)
+
+    def remove_callback(
+        self,
+        callback: ResultCallback,
+    ) -> None:
         """
         Remove a previously registered callback.
-
-        Raises:
-            TranscriptionError: If the callback was never registered.
         """
+
         try:
             self._callbacks.remove(callback)
-        except ValueError as exc:
-            raise TranscriptionError("Callback is not registered.") from exc
 
-    async def _dispatch_result(self, result: TranscriptChunk) -> None:
-        """Dispatch a transcript result to registered callbacks and push it
-        onto the result queue for stream() consumers."""
+        except ValueError as exc:
+            raise TranscriptionError(
+                "Callback is not registered."
+            ) from exc
+
+    async def _dispatch_result(
+        self,
+        result: TranscriptChunk,
+    ) -> None:
+        """
+        Publish one transcript result.
+
+        The result is sent to callbacks and then placed into the
+        asynchronous result queue.
+
+        Partial results are NOT filtered or discarded.
+        """
+
         for callback in list(self._callbacks):
+
             try:
                 callback(result)
+
             except Exception:
-                logger.exception("Transcription callback failed.")
+                logger.exception(
+                    "Transcription callback failed."
+                )
 
         await self._results.put(result)
 
-    async def stream(self) -> AsyncIterator[TranscriptChunk]:
+    async def stream(
+        self,
+    ) -> AsyncIterator[TranscriptChunk]:
         """
         Yield transcript results as they become available.
 
-        Ends once stop() has fully drained the worker and signalled
-        the result queue's sentinel.
+        Both partial and final results are yielded.
+
+        Example:
+
+            async for result in transcriber.stream():
+                if result.is_final:
+                    commit(result.text)
+                else:
+                    update_live_text(result.text)
         """
+
         while True:
+
             result = await self._results.get()
+
             if result is None:
                 break
+
             yield result
 
-    async def __aenter__(self) -> "Transcriber":
-        """Start the transcriber as an async context manager."""
+    # ------------------------------------------------------------------
+    # Async context manager
+    # ------------------------------------------------------------------
+
+    async def __aenter__(
+        self,
+    ) -> "Transcriber":
+        """Start the transcriber when entering an async context."""
+
         await self.start()
+
         return self
 
-    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
-        """Stop the transcriber when leaving the context."""
+    async def __aexit__(
+        self,
+        exc_type,
+        exc_value,
+        traceback,
+    ) -> None:
+        """Stop the transcriber when leaving an async context."""
+
         await self.stop()
+
+
+__all__ = [
+    "TranscriptionError",
+    "TranscriberStateError",
+    "TranscriptionEngine",
+    "Transcriber",
+]
