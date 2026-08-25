@@ -52,19 +52,22 @@ Transcript:
 {transcript}
 """
 
-SPEAKERS_PROMPT = """
-Identify all unique participants in the meeting.
+QNA_PROMPT = """
+You are answering questions about a recorded meeting.
 
-For each participant return:
-- name
-- role (if mentioned, otherwise null)
+Use ONLY the information provided in the retrieved meeting transcript context.
+Do not use outside knowledge or invent information.
 
-Rules:
-- Merge duplicate mentions of the same person.
-- Preserve names exactly as written.
-- Do not guess identities or roles.
-- Return an empty list if no participants can be identified.
+If the answer is not supported by the provided context, respond exactly with:
+"Not mentioned."
 
-Transcript:
-{transcript}
+Keep the answer concise and directly answer the user's question.
+
+MEETING CONTEXT:
+{context}
+
+USER QUESTION:
+{question}
+
+ANSWER:
 """

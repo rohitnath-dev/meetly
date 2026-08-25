@@ -1,5 +1,15 @@
-"""Core business logic."""
+"""
+Core meeting orchestration for Meetly.
+"""
 
-from .meeting import MeetingBot
+from .meeting import (
+    Meeting,
+    MeetingState,
+    MeetingStateError,
+)
 
-__all__ = ["MeetingBot"]
+__all__ = [
+    "Meeting",
+    "MeetingState",
+    "MeetingStateError",
+]
