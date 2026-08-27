@@ -13,5 +13,5 @@ __all__ = [
     "SYSTEM_PROMPT",
     "SUMMARY_PROMPT",
     "ACTION_ITEMS_PROMPT",
-    "SPEAKER_PROMPT",
+    "QNA_PROMPT",
 ]

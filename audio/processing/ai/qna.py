@@ -7,8 +7,11 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
-from meetly.llm import LLMClient, SYSTEM_PROMPT
-from .utils import QNA_PROMPT
+from meetly.llm import (
+    LLMClient,
+    SYSTEM_PROMPT,
+    QNA_PROMPT,
+)
 
 
 class MeetingQnA:

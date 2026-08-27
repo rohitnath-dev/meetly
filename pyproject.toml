@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meetly"
+version = "0.1.0"
+description = "Meeting transcription and intelligence toolkit"
+requires-python = ">=3.11"
+
+[tool.setuptools]
+package-dir = {meetly = "."}
+packages = [
+    "meetly",
+    "meetly.api",
+    "meetly.audio",
+    "meetly.audio.integrations",
+    "meetly.audio.processing",
+    "meetly.audio.processing.ai",
+    "meetly.audio.processing.diarization",
+    "meetly.audio.processing.live_transcription",
+    "meetly.audio.processing.transcript",
+    "meetly.audio.recorder",
+    "meetly.core",
+    "meetly.llm",
+]
