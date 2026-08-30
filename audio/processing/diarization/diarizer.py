@@ -45,13 +45,21 @@ from __future__ import annotations
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Callable, List, Optional
+from typing import (
+    AsyncIterator,
+    Callable,
+    List,
+    Optional,
+    Sequence,
+)
 
 from ...recorder.models import (
     AudioChunk,
     AudioFormat,
     SpeakerSegment,
+    TranscriptChunk,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -481,9 +489,93 @@ class Diarizer:
         exc_value,
         traceback,
     ) -> None:
-        """Stop the diarizer when leaving an async context."""
+        """Stop the diarizer when leaving the async context."""
 
         await self.stop()
+
+
+def align_speaker_segments(
+    transcript: TranscriptChunk,
+    speaker_segments: Sequence[SpeakerSegment],
+    max_gap_seconds: float = 1.0,
+) -> Optional[SpeakerSegment]:
+    """
+    Find the speaker segment that best matches a transcript chunk.
+
+    The segment with the greatest temporal overlap is preferred.
+    If no segment overlaps, the closest segment is returned when its
+    temporal gap is within max_gap_seconds.
+
+    Returns:
+        The best matching SpeakerSegment, or None if no suitable
+        segment exists.
+    """
+
+    if not isinstance(transcript, TranscriptChunk):
+        raise TypeError(
+            "transcript must be a TranscriptChunk."
+        )
+
+    if max_gap_seconds < 0:
+        raise ValueError(
+            "max_gap_seconds must be non-negative."
+        )
+
+    if not speaker_segments:
+        return None
+
+    transcript_start = transcript.start_time
+    transcript_end = transcript.end_time
+
+    best_segment: Optional[SpeakerSegment] = None
+    best_overlap = 0.0
+
+    for segment in speaker_segments:
+        overlap_start = max(
+            transcript_start,
+            segment.start_time,
+        )
+        overlap_end = min(
+            transcript_end,
+            segment.end_time,
+        )
+
+        overlap = max(
+            0.0,
+            overlap_end - overlap_start,
+        )
+
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_segment = segment
+
+    if best_segment is not None:
+        return best_segment
+
+    closest_segment: Optional[SpeakerSegment] = None
+    closest_gap = float("inf")
+
+    for segment in speaker_segments:
+        if segment.end_time < transcript_start:
+            gap = transcript_start - segment.end_time
+
+        elif segment.start_time > transcript_end:
+            gap = segment.start_time - transcript_end
+
+        else:
+            gap = 0.0
+
+        if gap < closest_gap:
+            closest_gap = gap
+            closest_segment = segment
+
+    if (
+        closest_segment is not None
+        and closest_gap <= max_gap_seconds
+    ):
+        return closest_segment
+
+    return None
 
 
 __all__ = [
@@ -492,4 +584,5 @@ __all__ = [
     "DiarizationError",
     "DiarizerStateError",
     "UnsupportedAudioFormatError",
+    "align_speaker_segments",
 ]

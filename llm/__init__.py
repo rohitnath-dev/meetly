@@ -5,7 +5,7 @@ from .prompts import (
     SYSTEM_PROMPT,
     SUMMARY_PROMPT,
     ACTION_ITEMS_PROMPT,
-    SPEAKER_PROMPT,
+    QNA_PROMPT,
 )
 
 __all__ = [

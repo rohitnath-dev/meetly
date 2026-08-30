@@ -1,5 +1,5 @@
-from .backend import RecorderBackend
-from .microphone import MicrophoneSource
+from .recorder.backend import RecorderBackend
+from .recorder.microphone import MicrophoneSource
 
 __all__ = [
     "RecorderBackend",

@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from meeting_bot.config import settings
+from config import settings
 from api.health import router as health_router
 
 

@@ -10,8 +10,8 @@ from meetly.audio.processing.transcript.assembler import (
     AssembledTranscript,
     TranscriptAssembler,
 )
-from meetly.audio.processing.transcriber import Transcriber
-from meetly.audio.processing.recorder.models import AudioChunk
+from meetly.audio.processing.live_transcription.transcriber import Transcriber
+from meetly.audio.recorder.models import AudioChunk
 from meetly.audio.processing.ai.qna import MeetingQnA
 from meetly.audio.processing.ai.summarizer import MeetingSummarizer
 from meetly.llm import LLMClient

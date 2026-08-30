@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Deque, Dict, List, Optional, Tuple
 from collections import deque
 
-from ..recorder.models import AudioChunk, AudioFormat, TranscriptChunk
+from ...recorder.models import AudioChunk, AudioFormat, TranscriptChunk
 from .transcriber import TranscriptionEngine, TranscriptionError
 
 logger = logging.getLogger(__name__)

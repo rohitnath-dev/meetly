@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from meeting_bot.config import settings
+from config import settings
 
 
 router = APIRouter(

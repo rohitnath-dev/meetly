@@ -17,7 +17,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import AsyncIterator, Callable, List, Optional
 
-from ..recorder.models import AudioChunk, TranscriptChunk
+from ...recorder.models import AudioChunk, TranscriptChunk
 
 logger = logging.getLogger(__name__)
 
