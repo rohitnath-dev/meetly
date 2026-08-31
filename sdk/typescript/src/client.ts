@@ -1,5 +1,4 @@
 import type {
-  AskRequest,
   AskResponse,
   CreateMeetingResponse,
   MeetingResponse,
@@ -17,12 +16,18 @@ export interface MeetlyClientOptions {
 export class MeetlyError extends Error {
   readonly status: number;
 
-  constructor(message: string, status = 0) {
+  constructor(
+    message: string,
+    status: number,
+  ) {
     super(message);
     this.name = "MeetlyError";
     this.status = status;
 
-    Object.setPrototypeOf(this, MeetlyError.prototype);
+    Object.setPrototypeOf(
+      this,
+      MeetlyError.prototype,
+    );
   }
 }
 
@@ -32,17 +37,17 @@ export class MeetlyClient {
   private readonly apiKey?: string;
 
   constructor(options: MeetlyClientOptions) {
-    if (!options.baseUrl?.trim()) {
-      throw new Error("baseUrl cannot be empty.");
+    if (!options.baseUrl.trim()) {
+      throw new Error(
+        "baseUrl cannot be empty.",
+      );
     }
 
-    try {
-      new URL(options.baseUrl);
-    } catch {
-      throw new Error("baseUrl must be a valid URL.");
-    }
+    this.baseUrl = options.baseUrl.replace(
+      /\/+$/,
+      "",
+    );
 
-    this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.apiKey = options.apiKey;
   }
 
@@ -51,12 +56,20 @@ export class MeetlyClient {
     path: string,
     options: RequestInit = {},
   ): Promise<T> {
-    const headers = new Headers(options.headers);
+    const headers = new Headers(
+      options.headers,
+    );
 
-    headers.set("Accept", "application/json");
+    headers.set(
+      "Accept",
+      "application/json",
+    );
 
     if (options.body !== undefined) {
-      headers.set("Content-Type", "application/json");
+      headers.set(
+        "Content-Type",
+        "application/json",
+      );
     }
 
     if (this.apiKey) {
@@ -77,12 +90,12 @@ export class MeetlyClient {
         },
       );
     } catch (error) {
-      const message =
+      throw new MeetlyError(
         error instanceof Error
           ? error.message
-          : "Network request failed.";
-
-      throw new MeetlyError(message);
+          : "Network request failed.",
+        0,
+      );
     }
 
     if (!response.ok) {
@@ -90,18 +103,16 @@ export class MeetlyClient {
         `Request failed with status ${response.status}.`;
 
       try {
-        const data: unknown = await response.json();
+        const data = await response.json();
 
         if (
           data &&
-          typeof data === "object" &&
-          "detail" in data &&
           typeof data.detail === "string"
         ) {
           message = data.detail;
         }
       } catch {
-        // Keep default error message.
+        // Keep the default error message.
       }
 
       throw new MeetlyError(
@@ -201,18 +212,18 @@ export class MeetlyClient {
     this.validateMeetingId(meetingId);
 
     if (!question.trim()) {
-      throw new Error("question cannot be empty.");
+      throw new Error(
+        "question cannot be empty.",
+      );
     }
-
-    const body: AskRequest = {
-      question,
-    };
 
     return this.request<AskResponse>(
       `/meetings/${encodeURIComponent(meetingId)}/ask`,
       {
         method: "POST",
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          question,
+        }),
       },
     );
   }
@@ -228,6 +239,3 @@ export class MeetlyClient {
     }
   }
 }
-
-
-export default MeetlyClient;
