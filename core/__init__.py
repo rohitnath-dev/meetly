@@ -1,12 +1,6 @@
-"""
-Core meeting orchestration for Meetly.
-"""
+"""Meetly core meeting orchestration."""
 
-from .meeting import (
-    Meeting,
-    MeetingState,
-    MeetingStateError,
-)
+from .meeting import Meeting, MeetingState, MeetingStateError
 
 __all__ = [
     "Meeting",

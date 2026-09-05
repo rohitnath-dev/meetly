@@ -1,7 +1,14 @@
+"""Audio processing pipeline for Meetly."""
+
+from .recorder.models import AudioChunk, AudioFormat, TranscriptChunk, SpeakerSegment
+from .recorder.source import AudioSource
 from .recorder.backend import RecorderBackend
-from .recorder.microphone import MicrophoneSource
 
 __all__ = [
+    "AudioChunk",
+    "AudioFormat",
+    "TranscriptChunk",
+    "SpeakerSegment",
+    "AudioSource",
     "RecorderBackend",
-    "MicrophoneSource",
 ]

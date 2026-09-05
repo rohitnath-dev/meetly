@@ -1,7 +1,5 @@
-from .main import app
-from .health import router as health_router
+"""Meetly HTTP API layer."""
 
-__all__ = [
-    "app",
-    "health_router",
-]
+from .main import app
+
+__all__ = ["app"]

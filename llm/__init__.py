@@ -1,17 +1,18 @@
-"""LLM package."""
+"""LLM integration for Meetly."""
 
-from .client import LLMClient
+from .client import LLMClient, LLMError
 from .prompts import (
-    SYSTEM_PROMPT,
-    SUMMARY_PROMPT,
-    ACTION_ITEMS_PROMPT,
-    QNA_PROMPT,
+    SUMMARIZATION_SYSTEM_PROMPT,
+    SUMMARIZATION_USER_PROMPT_TEMPLATE,
+    QNA_SYSTEM_PROMPT,
+    QNA_USER_PROMPT_TEMPLATE,
 )
 
 __all__ = [
     "LLMClient",
-    "SYSTEM_PROMPT",
-    "SUMMARY_PROMPT",
-    "ACTION_ITEMS_PROMPT",
-    "QNA_PROMPT",
+    "LLMError",
+    "SUMMARIZATION_SYSTEM_PROMPT",
+    "SUMMARIZATION_USER_PROMPT_TEMPLATE",
+    "QNA_SYSTEM_PROMPT",
+    "QNA_USER_PROMPT_TEMPLATE",
 ]
