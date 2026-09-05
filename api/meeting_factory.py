@@ -18,13 +18,6 @@ from meetly.core.meeting import Meeting
 
 
 def create_meeting() -> Meeting:
-    """
-    Create a fully configured Meeting instance.
-
-    The factory owns construction of the concrete processing
-    components while Meeting remains responsible for orchestration.
-    """
-
     whisper_engine = WhisperEngine()
 
     transcriber = Transcriber(
@@ -38,7 +31,6 @@ def create_meeting() -> Meeting:
     )
 
     assembler = TranscriptAssembler()
-
     llm = LLMClient()
 
     return Meeting(

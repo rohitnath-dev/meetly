@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     OPENROUTER_TEMPERATURE: float = 0.2
     OPENROUTER_MAX_TOKENS: int = 2000
 
+    # Google Meet
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REFRESH_TOKEN: str = ""
+
     # App Metadata
     APP_TITLE: str = "Meetly"
     HTTP_REFERER: str = "https://meetly.ai"
