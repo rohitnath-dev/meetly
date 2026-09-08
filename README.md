@@ -1,312 +1,223 @@
 # Meetly
 
-Meetly is a meeting intelligence backend that captures meeting audio, transcribes speech, identifies individual speakers, assembles transcripts, and generates AI-powered summaries and insights. The project exposes a FastAPI-based HTTP API and includes a TypeScript SDK for integrating with the API from JavaScript and TypeScript applications.
+Meetly is a FastAPI meeting-intelligence service. It accepts audio from a
+provider, sends it through live transcription and speaker diarization, and
+exposes the assembled transcript plus optional summaries and Q&A.
 
-## Overview
+## What is included
 
-Meetly separates concerns cleanly across the codebase. The API layer handles HTTP requests and responses. The core layer manages meeting lifecycle and orchestration. The audio layer handles recording, transcription, and diarization. The LLM layer handles summarization and question answering. This separation keeps the system maintainable and allows each layer to evolve independently.
+- Provider-based meeting lifecycle: `local` and `google_meet`
+- Live transcription with `faster-whisper`
+- Speaker diarization and transcript assembly
+- Optional OpenRouter summaries and transcript Q&A
+- FastAPI REST API with OpenAPI docs
+- TypeScript SDK with a resource API for meetings
 
-## Features
+The processing path is:
 
-- Meeting lifecycle management, including creation, start, and stop operations
-- Live transcription pipeline
-- Speaker diarization
-- Transcript assembly
-- AI-powered meeting summarization
-- Question answering over meeting content
-- Zoom integration layer
-- FastAPI REST API with interactive OpenAPI documentation
-- TypeScript SDK with typed API responses
-- API key authentication support in the SDK
-- Centralized HTTP error handling in the SDK
-
-## Project Structure
-
-```
-meetly/
-├── api/                    FastAPI HTTP API
-│   ├── main.py
-│   ├── health.py
-│   ├── meetings.py
-│   ├── meeting_factory.py
-│   ├── meeting_manager.py
-│   └── schemas/
-│       └── meeting.py
-│
-├── audio/                  Audio processing
-│   ├── integrations/
-│   │   └── zoom.py
-│   ├── processing/
-│   │   ├── ai/
-│   │   ├── diarization/
-│   │   ├── live_transcription/
-│   │   └── transcript/
-│   └── recorder/
-│
-├── core/
-│   └── meeting.py          Meeting orchestration
-│
-├── llm/
-│   ├── client.py
-│   └── prompts.py
-│
-├── sdk/
-│   └── typescript/         TypeScript SDK
-│       ├── src/
-│       ├── tests/
-│       ├── package.json
-│       └── tsconfig.json
-│
-├── tests/
-│   └── api/
-│
-├── config.py
-├── pyproject.toml
-├── requirements.txt
-├── LICENSE
-└── README.md
+```text
+provider audio
+  -> AudioSource
+  -> RecorderBackend
+  -> Meeting
+  -> Transcriber / Diarizer
+  -> TranscriptAssembler
 ```
 
 ## Requirements
 
-- Python 3.10 or later
-- Node.js 18 or later, for the TypeScript SDK
-- npm
+- Python 3.10+
+- Node.js 18+ and npm for the TypeScript SDK
+- PortAudio for microphone capture when using a local microphone source
 
-## Getting Started
-
-Clone the repository:
-
-```bash
-git clone <YOUR_REPOSITORY_URL>
-cd meetly
-```
-
-### Python Environment
-
-Create and activate a virtual environment:
+## Run the API
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate      # On Windows: .venv\Scripts\activate
-```
-
-Install dependencies:
-
-```bash
+source .venv/bin/activate
 pip install -r requirements.txt
-```
 
-### Environment Variables
-
-Create a `.env` file and configure the required settings before starting the API. Do not commit secrets, API keys, or credentials to version control.
-
-### Running the API
-
-```bash
 uvicorn api.main:app --host 0.0.0.0 --port 8000
 ```
 
-The API will be available at `http://localhost:8000`. Interactive documentation is available at `http://localhost:8000/docs`, and the OpenAPI specification is available at `http://localhost:8000/openapi.json`.
+The API is available at `http://localhost:8000`.
 
-### TypeScript SDK
+- Health: `GET /health/`
+- OpenAPI UI: `http://localhost:8000/docs`
+- OpenAPI JSON: `http://localhost:8000/openapi.json`
+
+Copy `.env.example` to `.env` and set only the values required by the
+providers and AI operations you use. Never commit `.env` or credentials.
+
+## Google Meet
+
+Meetly uses the Google Meet Media API audio path:
+
+```text
+Google Meet
+  -> enrolled Google Meet Media transport
+  -> GoogleMeetAudioSource
+  -> RecorderBackend
+  -> Meeting
+  -> transcription and diarization
+```
+
+Create a Google Meet-backed meeting with:
+
+```bash
+curl -X POST http://localhost:8000/meetings \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "provider": "google_meet",
+    "meeting_url": "https://meet.google.com/abc-defg-hij"
+  }'
+```
+
+Then start it with:
+
+```bash
+curl -X POST http://localhost:8000/meetings/<meeting_id>/start
+```
+
+Required environment variables:
+
+```text
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_REFRESH_TOKEN=
+```
+
+The refresh token must be authorized for the required Google Meet scopes,
+including the restricted live-media audio scope. Google Meet live media is a
+Developer Preview capability and requires the Google Cloud project and OAuth
+principal to be enrolled.
+
+The REST API alone does not provide live audio. Meetly therefore keeps the
+official Google Media API reference-client transport as an explicit
+`MediaTransport` boundary. The transport must be supplied by the enrolled
+Google Media integration; Meetly does not use browser automation, fake frames,
+or undocumented signaling.
+
+## REST API
+
+### Create a meeting
+
+`POST /meetings`
+
+Local provider:
+
+```json
+{}
+```
+
+Google Meet provider:
+
+```json
+{
+  "provider": "google_meet",
+  "meeting_url": "https://meet.google.com/abc-defg-hij"
+}
+```
+
+The response contains `meeting_id`, `state`, and `provider`.
+
+### Meeting lifecycle
+
+```text
+GET  /meetings/{meeting_id}
+POST /meetings/{meeting_id}/start
+POST /meetings/{meeting_id}/stop
+```
+
+### Transcript and AI operations
+
+```text
+GET  /meetings/{meeting_id}/transcript
+GET  /meetings/{meeting_id}/summary
+POST /meetings/{meeting_id}/ask
+```
+
+Ask request:
+
+```json
+{
+  "question": "What decisions were made?"
+}
+```
+
+Meeting states are `idle`, `running`, `stopping`, `stopped`, and `error`.
+
+## TypeScript SDK
+
+Build the SDK:
 
 ```bash
 cd sdk/typescript
 npm install
 npm run build
-npm run typecheck
 ```
 
-## SDK Usage
+Use the provider-based resource API:
 
 ```ts
 import { MeetlyClient } from "@meetly/sdk";
 
-const client = new MeetlyClient({
+const meetly = new MeetlyClient({
   baseUrl: "http://localhost:8000",
 });
 
-const meeting = await client.createMeeting();
-console.log(meeting.meeting_id);
+const meeting = await meetly.meetings.create({
+  provider: "google_meet",
+  meetingUrl: "https://meet.google.com/abc-defg-hij",
+});
 
-const status = await client.getMeeting(meeting.meeting_id);
-console.log(status);
+await meeting.start();
+const transcript = await meeting.getTranscript();
+console.log(transcript);
 ```
 
-An API key can be supplied when creating the client:
+The resource also provides:
 
 ```ts
-const client = new MeetlyClient({
-  baseUrl: "https://your-api.example.com",
-  apiKey: "your-api-key",
+await meeting.getStatus();
+await meeting.stop();
+await meeting.getTranscriptResponse();
+```
+
+An API key can be supplied to the client:
+
+```ts
+const meetly = new MeetlyClient({
+  baseUrl: "https://api.example.com",
+  apiKey: process.env.MEETLY_API_KEY,
 });
 ```
 
-The SDK sends the key using the Bearer authorization scheme.
+The SDK sends the key as a Bearer token.
 
-## API Reference
+## Development checks
 
-### Health
-
-`GET /health/` returns the health status of the API.
-
-### Root
-
-`GET /` returns basic project and API information.
-
-### Create a Meeting
-
-`POST /meetings` creates and registers a new meeting.
-
-Example response:
-
-```json
-{
-  "meeting_id": "mtg_...",
-  "state": "idle"
-}
-```
-
-### Get Meeting Status
-
-`GET /meetings/{meeting_id}` returns the current state of a meeting.
-
-Example response:
-
-```json
-{
-  "meeting_id": "mtg_...",
-  "state": "idle",
-  "running": false
-}
-```
-
-### Start a Meeting
-
-`POST /meetings/{meeting_id}/start` starts processing for a registered meeting.
-
-### Stop a Meeting
-
-`POST /meetings/{meeting_id}/stop` stops processing for a meeting.
-
-### Get Transcript
-
-`GET /meetings/{meeting_id}/transcript` returns the finalized transcript.
-
-Example response:
-
-```json
-{
-  "meeting_id": "mtg_...",
-  "transcript": "..."
-}
-```
-
-### Get Summary
-
-`GET /meetings/{meeting_id}/summary` generates and returns an AI-powered summary.
-
-Example response:
-
-```json
-{
-  "meeting_id": "mtg_...",
-  "summary": "..."
-}
-```
-
-### Ask a Question
-
-`POST /meetings/{meeting_id}/ask` allows a question to be asked about the finalized meeting.
-
-Request:
-
-```json
-{
-  "question": "What were the main decisions?"
-}
-```
-
-Response:
-
-```json
-{
-  "meeting_id": "mtg_...",
-  "question": "What were the main decisions?",
-  "answer": "..."
-}
-```
-
-## Meeting States
-
-| State | Description |
-|---|---|
-| idle | Meeting has been created but processing has not started |
-| running | Meeting processing is active |
-| stopping | Meeting is in the process of stopping |
-| stopped | Meeting processing has stopped |
-| error | Meeting processing encountered an error |
-
-## Testing
-
-Python tests are located under `tests/`. Run them with:
+Python tests:
 
 ```bash
 pytest
 ```
 
-TypeScript SDK tests are located under `sdk/typescript/tests/`. Run type checks with:
+TypeScript checks:
 
 ```bash
 cd sdk/typescript
 npm run typecheck
-```
-
-If test tooling is configured for the SDK, run:
-
-```bash
 npm test
-```
-
-## Deployment
-
-Meetly can be deployed as a web service on any platform that supports Python ASGI applications. For a deployment such as Railway, start the application with:
-
-```bash
-uvicorn api.main:app --host 0.0.0.0 --port $PORT
-```
-
-Ensure all required environment variables and external AI or audio service credentials are configured in the deployment environment. After deployment, the FastAPI documentation should be available at `https://<your-domain>/docs`.
-
-## Error Handling
-
-The API communicates failures using standard HTTP status codes:
-
-- `404` indicates the meeting does not exist
-- `400` indicates an invalid meeting operation or request
-- `500` indicates an internal server error
-
-The TypeScript SDK exposes a `MeetlyError` class containing a `message` and a `status` field:
-
-```ts
-try {
-  await client.getMeeting("missing");
-} catch (error) {
-  if (error instanceof MeetlyError) {
-    console.error(error.status);
-    console.error(error.message);
-  }
-}
 ```
 
 ## Security
 
-- Do not commit API keys or other secrets to the repository
-- Store deployment credentials in environment variables
-- Use HTTPS in production
-- Do not expose development credentials in client-side applications
+- Keep OAuth credentials, API keys, and refresh tokens in environment
+  variables or a secrets manager.
+- Do not commit `.env` files or credential files.
+- Use HTTPS and server-side secret storage in production.
 
 ## License
 
-This project is licensed under the terms included in this repository. See the `LICENSE` file for details.
+See `LICENSE`.
