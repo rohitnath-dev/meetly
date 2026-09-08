@@ -6,14 +6,18 @@ from meetly.audio.recorder.source import AudioSource
 
 from .auth import GoogleMeetAuth
 from .media.client import GoogleMeetMediaClient, GoogleMeetMediaConfig
-from .media.session import MediaSession
+from .media.session import MediaSession, MediaTransport
 from .media.audio_source import GoogleMeetAudioSource
 
 
 class GoogleMeetMediaIntegration:
-    def __init__(self, client: GoogleMeetMediaClient) -> None:
+    def __init__(
+        self,
+        client: GoogleMeetMediaClient,
+        transport: MediaTransport | None = None,
+    ) -> None:
         self.client = client
-        self.session = MediaSession(client)
+        self.session = MediaSession(client, transport=transport)
         self.audio_source = GoogleMeetAudioSource(self.session)
 
     async def start(self) -> GoogleMeetAudioSource:
@@ -40,6 +44,7 @@ class GoogleMeetProvider(AudioSource):
         client_id: str,
         client_secret: str,
         refresh_token: str,
+        media_transport: MediaTransport | None = None,
     ) -> None:
         self.meeting_url = meeting_url
         self._google_credentials = (
@@ -48,6 +53,7 @@ class GoogleMeetProvider(AudioSource):
             refresh_token,
         )
         self._auth: GoogleMeetAuth | None = None
+        self._media_transport = media_transport
         self._integration: GoogleMeetMediaIntegration | None = None
         self._source: GoogleMeetAudioSource | None = None
 
@@ -70,7 +76,10 @@ class GoogleMeetProvider(AudioSource):
             space_name=space_name_from_url(self.meeting_url),
         )
         media_client = GoogleMeetMediaClient(config)
-        self._integration = GoogleMeetMediaIntegration(media_client)
+        self._integration = GoogleMeetMediaIntegration(
+            media_client,
+            transport=self._media_transport,
+        )
         self._source = await self._integration.start()
 
     async def stop(self) -> None:

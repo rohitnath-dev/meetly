@@ -16,6 +16,7 @@ from meetly.audio.processing.transcript.assembler import (
 from meetly.llm import LLMClient
 from meetly.core.meeting import Meeting
 from meetly.audio.integrations.google_meet import GoogleMeetProvider
+from meetly.audio.integrations.google_meet import MediaTransport
 from config import settings
 
 
@@ -23,6 +24,7 @@ def create_meeting(
     *,
     provider: str = "local",
     meeting_url: str | None = None,
+    media_transport: MediaTransport | None = None,
 ) -> Meeting:
     whisper_engine = WhisperEngine()
 
@@ -50,6 +52,7 @@ def create_meeting(
             client_id=settings.GOOGLE_CLIENT_ID,
             client_secret=settings.GOOGLE_CLIENT_SECRET,
             refresh_token=settings.GOOGLE_REFRESH_TOKEN,
+            media_transport=media_transport,
         )
     elif provider != "local":
         raise ValueError(f"Unsupported meeting provider: {provider}.")

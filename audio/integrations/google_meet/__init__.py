@@ -28,6 +28,7 @@ from .media import (
     GoogleMeetMediaError,
     GoogleMeetMediaConfigurationError,
     MediaSession,
+    MediaTransport,
     GoogleMeetAudioSource,
 )
 
@@ -51,6 +52,7 @@ __all__ = [
     "GoogleMeetMediaError",
     "GoogleMeetMediaConfigurationError",
     "MediaSession",
+    "MediaTransport",
     "GoogleMeetAudioSource",
     "GoogleMeetMediaIntegration",
     "GoogleMeetProvider",

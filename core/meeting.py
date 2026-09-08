@@ -12,6 +12,7 @@ from meetly.audio.processing.transcript.assembler import (
 )
 from meetly.audio.processing.live_transcription.transcriber import Transcriber
 from meetly.audio.recorder.models import AudioChunk
+from meetly.audio.recorder.backend import RecorderBackend
 from meetly.audio.recorder.source import AudioSource
 from meetly.audio.processing.ai.summarizer import MeetingSummarizer
 from meetly.llm import LLMClient
@@ -79,6 +80,10 @@ class Meeting:
         self._summarizer = MeetingSummarizer(llm)
         self._qna_llm = llm
         self._audio_source = audio_source
+        self._recorder: RecorderBackend | None = None
+        if audio_source is not None:
+            self._recorder = RecorderBackend()
+            self._recorder.register_source(audio_source)
         self._provider = provider
         self._meeting_url = meeting_url
 
@@ -164,11 +169,11 @@ class Meeting:
 
             self._state = MeetingState.RUNNING
 
-            if self._audio_source is not None:
-                await self._audio_source.start()
+            if self._recorder is not None:
+                await self._recorder.start()
                 self._audio_task = asyncio.create_task(
-                    self._consume_audio_source(),
-                    name="meetly-meeting-audio-source",
+                    self._consume_recorder(),
+                    name="meetly-meeting-recorder",
                 )
 
             logger.info("Meeting started.")
@@ -341,13 +346,13 @@ class Meeting:
             self._state = MeetingState.ERROR
             raise
 
-    async def _consume_audio_source(self) -> None:
-        """Forward provider audio into the processing pipeline."""
-        if self._audio_source is None:
+    async def _consume_recorder(self) -> None:
+        """Forward recorder output into the processing pipeline."""
+        if self._recorder is None:
             return
 
         try:
-            async for audio in self._audio_source.stream():
+            async for audio in self._recorder:
                 if self._state is not MeetingState.RUNNING:
                     break
                 await self.submit_audio(audio)
@@ -432,11 +437,11 @@ class Meeting:
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-        if self._audio_source is not None:
+        if self._recorder is not None:
             try:
-                await self._audio_source.stop()
+                await self._recorder.stop()
             except Exception:
-                logger.exception("Failed to stop the meeting audio source.")
+                logger.exception("Failed to stop the meeting recorder.")
 
     async def __aenter__(self) -> "Meeting":
         await self.start()
