@@ -4,7 +4,11 @@ from .client import (
     GoogleMeetMediaError,
     GoogleMeetMediaConfigurationError,
 )
-from .session import MediaSession, MediaTransport
+from .session import (
+    GoogleMeetMediaTransport,
+    MediaSession,
+    MediaTransport,
+)
 from .audio_source import GoogleMeetAudioSource
 
 __all__ = [
@@ -12,6 +16,7 @@ __all__ = [
     "GoogleMeetMediaConfig",
     "GoogleMeetMediaError",
     "GoogleMeetMediaConfigurationError",
+    "GoogleMeetMediaTransport",
     "MediaSession",
     "MediaTransport",
     "GoogleMeetAudioSource",

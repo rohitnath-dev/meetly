@@ -6,7 +6,11 @@ from meetly.audio.recorder.source import AudioSource
 
 from .auth import GoogleMeetAuth
 from .media.client import GoogleMeetMediaClient, GoogleMeetMediaConfig
-from .media.session import MediaSession, MediaTransport
+from .media.session import (
+    GoogleMeetMediaTransport,
+    MediaSession,
+    MediaTransport,
+)
 from .media.audio_source import GoogleMeetAudioSource
 
 
@@ -17,7 +21,10 @@ class GoogleMeetMediaIntegration:
         transport: MediaTransport | None = None,
     ) -> None:
         self.client = client
-        self.session = MediaSession(client, transport=transport)
+        self.session = MediaSession(
+            client,
+            transport=transport or GoogleMeetMediaTransport(),
+        )
         self.audio_source = GoogleMeetAudioSource(self.session)
 
     async def start(self) -> GoogleMeetAudioSource:
