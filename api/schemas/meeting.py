@@ -13,18 +13,33 @@ class MeetingStateResponse(str, Enum):
     ERROR = "error"
 
 
+class MeetingProvider(str, Enum):
+    LOCAL = "local"
+    GOOGLE_MEET = "google_meet"
+
+
+class CreateMeetingRequest(BaseModel):
+    provider: MeetingProvider = MeetingProvider.LOCAL
+    meeting_url: str | None = Field(
+        default=None,
+        description="Google Meet URL when provider is google_meet.",
+    )
+
+
 class CreateMeetingResponse(BaseModel):
     meeting_id: str = Field(
         ...,
         description="Unique identifier of the meeting.",
     )
     state: MeetingStateResponse
+    provider: MeetingProvider = MeetingProvider.LOCAL
 
 
 class MeetingResponse(BaseModel):
     meeting_id: str
     state: MeetingStateResponse
     running: bool
+    provider: MeetingProvider = MeetingProvider.LOCAL
 
 
 class TranscriptResponse(BaseModel):
@@ -53,6 +68,8 @@ class AskResponse(BaseModel):
 
 __all__ = [
     "MeetingStateResponse",
+    "MeetingProvider",
+    "CreateMeetingRequest",
     "CreateMeetingResponse",
     "MeetingResponse",
     "TranscriptResponse",

@@ -1,11 +1,58 @@
 import type {
   AskResponse,
+  CreateMeetingOptions,
   CreateMeetingResponse,
   MeetingResponse,
   SummaryResponse,
   TranscriptResponse,
 } from "./types.js";
 
+export class MeetingResource {
+  readonly id: string;
+  readonly provider?: CreateMeetingResponse["provider"];
+  readonly state: CreateMeetingResponse["state"];
+
+  constructor(
+    private readonly client: MeetlyClient,
+    response: CreateMeetingResponse,
+  ) {
+    this.id = response.meeting_id;
+    this.provider = response.provider;
+    this.state = response.state;
+  }
+
+  async start(): Promise<MeetingResponse> {
+    return this.client.startMeeting(this.id);
+  }
+
+  async stop(): Promise<MeetingResponse> {
+    return this.client.stopMeeting(this.id);
+  }
+
+  async getTranscript(): Promise<string> {
+    const response = await this.client.getTranscript(this.id);
+    return response.transcript;
+  }
+
+  async getTranscriptResponse(): Promise<TranscriptResponse> {
+    return this.client.getTranscript(this.id);
+  }
+
+  async getStatus(): Promise<MeetingResponse> {
+    return this.client.getMeeting(this.id);
+  }
+}
+
+export class MeetingsResource {
+  constructor(private readonly client: MeetlyClient) {}
+
+  async create(
+    options: CreateMeetingOptions,
+  ): Promise<MeetingResource> {
+    const response = await this.client.createMeeting(options);
+    return new MeetingResource(this.client, response);
+  }
+}
 
 export interface MeetlyClientOptions {
   baseUrl: string;
@@ -35,6 +82,7 @@ export class MeetlyError extends Error {
 export class MeetlyClient {
   private readonly baseUrl: string;
   private readonly apiKey?: string;
+  readonly meetings: MeetingsResource;
 
   constructor(options: MeetlyClientOptions) {
     if (!options.baseUrl.trim()) {
@@ -49,10 +97,11 @@ export class MeetlyClient {
     );
 
     this.apiKey = options.apiKey;
+    this.meetings = new MeetingsResource(this);
   }
 
 
-  private async request<T>(
+  async request<T>(
     path: string,
     options: RequestInit = {},
   ): Promise<T> {
@@ -125,11 +174,21 @@ export class MeetlyClient {
   }
 
 
-  async createMeeting(): Promise<CreateMeetingResponse> {
+  async createMeeting(
+    options?: CreateMeetingOptions,
+  ): Promise<CreateMeetingResponse> {
+    const body = options
+      ? JSON.stringify({
+          provider: options.provider,
+          meeting_url: options.meetingUrl,
+        })
+      : undefined;
+
     return this.request<CreateMeetingResponse>(
       "/meetings",
       {
         method: "POST",
+        ...(body ? { body } : {}),
       },
     );
   }

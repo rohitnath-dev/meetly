@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import AsyncIterator, Callable, List, Optional, Sequence
 
 from ..diarization.diarizer import align_speaker_segments
@@ -263,6 +263,24 @@ class TranscriptAssembler:
                 item.end_time,
             )
         )
+
+        # Transcription and diarization run concurrently.  A final
+        # transcript can therefore be committed just before its speaker
+        # segment arrives.  Backfill that entry so the public transcript
+        # remains correctly diarized regardless of queue scheduling.
+        for index, entry in enumerate(self._entries):
+            if entry.speaker_id is not None:
+                continue
+            if (
+                segment.end_time
+                >= entry.start_time - self._max_speaker_gap_seconds
+                and segment.start_time
+                <= entry.end_time + self._max_speaker_gap_seconds
+            ):
+                self._entries[index] = replace(
+                    entry,
+                    speaker_id=segment.speaker_id,
+                )
 
         # Keep only a bounded history.
         #

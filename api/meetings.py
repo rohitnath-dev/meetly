@@ -8,7 +8,9 @@ from api.meeting_manager import (
 from api.schemas.meeting import (
     AskRequest,
     AskResponse,
+    CreateMeetingRequest,
     CreateMeetingResponse,
+    MeetingProvider,
     MeetingResponse,
     MeetingStateResponse,
     SummaryResponse,
@@ -28,18 +30,27 @@ manager = MeetingManager()
     "",
     response_model=CreateMeetingResponse,
 )
-async def create_new_meeting() -> CreateMeetingResponse:
+async def create_new_meeting(
+    request: CreateMeetingRequest | None = None,
+) -> CreateMeetingResponse:
     """Create and register a new Meetly meeting."""
 
     try:
-        meeting = create_meeting()
+        request = request or CreateMeetingRequest()
+        meeting = create_meeting(
+            provider=request.provider.value,
+            meeting_url=request.meeting_url,
+        )
         meeting_id = manager.create(meeting)
 
         return CreateMeetingResponse(
             meeting_id=meeting_id,
             state=MeetingStateResponse.IDLE,
+            provider=MeetingProvider(meeting.provider),
         )
 
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -71,6 +82,7 @@ async def get_meeting(
             meeting.state.value
         ),
         running=meeting.running,
+        provider=MeetingProvider(meeting.provider),
     )
 
 
@@ -107,6 +119,7 @@ async def start_meeting(
             meeting.state.value
         ),
         running=meeting.running,
+        provider=MeetingProvider(meeting.provider),
     )
 
 
@@ -143,6 +156,7 @@ async def stop_meeting(
             meeting.state.value
         ),
         running=meeting.running,
+        provider=MeetingProvider(meeting.provider),
     )
 
 

@@ -12,7 +12,10 @@ import asyncio
 import logging
 from typing import AsyncIterator, Optional
 
-import sounddevice as sd
+try:
+    import sounddevice as sd
+except (ImportError, OSError):
+    sd = None  # type: ignore[assignment]
 
 from .models import AudioChunk, AudioFormat
 from .source import AudioSource
@@ -84,7 +87,7 @@ class MicrophoneSource(AudioSource):
         self._device = device
         self._name = name
 
-        self._stream: Optional[sd.RawInputStream] = None
+        self._stream: Optional[object] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._queue: "asyncio.Queue[Optional[AudioChunk]]" = asyncio.Queue()
         self._running = False
@@ -126,6 +129,11 @@ class MicrophoneSource(AudioSource):
         self._loop = asyncio.get_running_loop()
         self._queue = asyncio.Queue()
 
+        if sd is None:
+            raise MicrophoneError(
+                "The sounddevice/PortAudio runtime is unavailable."
+            )
+
         try:
             self._stream = sd.RawInputStream(
                 samplerate=self._sample_rate,
@@ -136,11 +144,6 @@ class MicrophoneSource(AudioSource):
                 callback=self._on_audio,
             )
             self._stream.start()
-        except sd.PortAudioError as exc:
-            self._stream = None
-            raise MicrophoneError(
-                f"Failed to open microphone input stream: {exc}"
-            ) from exc
         except Exception as exc:
             self._stream = None
             raise MicrophoneError(
@@ -174,7 +177,7 @@ class MicrophoneSource(AudioSource):
             try:
                 self._stream.stop()
                 self._stream.close()
-            except sd.PortAudioError:
+            except Exception:
                 logger.exception(
                     "Error while closing microphone stream for '%s'.", self._name
                 )
@@ -191,7 +194,7 @@ class MicrophoneSource(AudioSource):
         indata: bytes,
         frames: int,
         time_info: object,
-        status: sd.CallbackFlags,
+        status: object,
     ) -> None:
         """
         PortAudio callback invoked on the native audio thread.

@@ -1,0 +1,19 @@
+{
+  "name": "workspace",
+  "version": "1.0.0",
+  "description": "Meetly is a meeting intelligence backend that captures meeting audio, transcribes speech, identifies individual speakers, assembles transcripts, and generates AI-powered summaries and insights. The project exposes a FastAPI-based HTTP API and includes a TypeScript SDK for integrating with the API from JavaScript and TypeScript applications.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  }
+}

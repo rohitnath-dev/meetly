@@ -5,10 +5,13 @@ pydantic-settings==2.1.0
 python-dotenv==1.0.0
 httpx==0.25.2
 sounddevice==0.4.6
-aiortc==1.5.0
 numpy==1.24.3
-PyAV==11.0.0
-faster-whisper==0.10.0
-pyannote.audio==3.0.1
+faster-whisper>=1.0.0
 sentence-transformers==2.2.2
+langchain>=0.1.0
+langchain-community>=0.0.1
+faiss-cpu>=1.7.4
 matplotlib==3.8.0
+pytest
+pytest-asyncio
+faster-whisper

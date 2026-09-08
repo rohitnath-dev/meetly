@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import AsyncIterator
 
 import numpy as np
-from av import AudioFrame
 
 from meetly.audio.recorder.models import AudioChunk, AudioFormat
 from meetly.audio.recorder.source import AudioSource
@@ -43,7 +42,8 @@ class GoogleMeetAudioSource(AudioSource):
 
             yield self._frame_to_chunk(frame)
 
-    def _frame_to_chunk(self, frame: AudioFrame) -> AudioChunk:
+    def _frame_to_chunk(self, frame: object) -> AudioChunk:
+        """Convert a frame supplied by the official media transport."""
         array = frame.to_ndarray()
 
         if array.ndim == 2:

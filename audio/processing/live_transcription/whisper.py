@@ -316,7 +316,10 @@ class WhisperEngine(TranscriptionEngine):
             buffer.buffered_bytes / self._bytes_per_second
         )
 
-        if buffered_duration < self._minimum_audio_seconds:
+        if buffered_duration < max(
+            self._minimum_audio_seconds,
+            self._inference_window_seconds,
+        ):
             return None
 
         # Do not run Whisper on every tiny microphone callback.

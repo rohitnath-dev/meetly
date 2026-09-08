@@ -1,7 +1,11 @@
 from .auth import GoogleMeetAuth
 from .client import GoogleMeetClient
 from .events import GoogleMeetEventHandler
-from .integration import GoogleMeetMediaIntegration
+from .integration import (
+    GoogleMeetMediaIntegration,
+    GoogleMeetProvider,
+    space_name_from_url,
+)
 from .exceptions import (
     GoogleMeetAPIError,
     GoogleMeetAuthenticationError,
@@ -49,4 +53,6 @@ __all__ = [
     "MediaSession",
     "GoogleMeetAudioSource",
     "GoogleMeetMediaIntegration",
+    "GoogleMeetProvider",
+    "space_name_from_url",
 ]

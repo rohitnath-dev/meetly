@@ -5,10 +5,18 @@ export type MeetingState =
   | "stopped"
   | "error";
 
+export type MeetingProvider = "local" | "google_meet";
+
+export interface CreateMeetingOptions {
+  provider: MeetingProvider;
+  meetingUrl?: string;
+}
+
 
 export interface CreateMeetingResponse {
   meeting_id: string;
   state: MeetingState;
+  provider?: MeetingProvider;
 }
 
 
@@ -16,6 +24,7 @@ export interface MeetingResponse {
   meeting_id: string;
   state: MeetingState;
   running: boolean;
+  provider?: MeetingProvider;
 }
 
 

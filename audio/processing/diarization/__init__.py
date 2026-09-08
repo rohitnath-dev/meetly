@@ -32,11 +32,8 @@ from .engine import (
 )
 
 from .identity import (
-    IdentityResolutionError,
-    Participant,
-    ParticipantRegistry,
+    NoOpSpeakerIdentityResolver,
     ResolvedSpeaker,
-    SpeakerAttributor,
     SpeakerIdentityResolver,
 )
 
@@ -51,9 +48,6 @@ __all__ = [
 
     # Identity
     "SpeakerIdentityResolver",
-    "ParticipantRegistry",
-    "Participant",
+    "NoOpSpeakerIdentityResolver",
     "ResolvedSpeaker",
-    "SpeakerAttributor",
-    "IdentityResolutionError",
 ]

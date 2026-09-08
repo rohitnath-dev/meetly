@@ -1,6 +1,8 @@
 export {
   MeetlyClient,
   MeetlyError,
+  MeetingResource,
+  MeetingsResource,
 } from "./client.js";
 
 export type {
@@ -9,6 +11,8 @@ export type {
 
 export type {
   MeetingState,
+  MeetingProvider,
+  CreateMeetingOptions,
   CreateMeetingResponse,
   MeetingResponse,
   TranscriptResponse,

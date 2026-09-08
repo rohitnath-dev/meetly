@@ -15,29 +15,19 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "httpx>=0.25.0",
     "sounddevice>=0.4.6",
-    "aiortc>=1.5.0",
     "numpy>=1.24.0",
-    "av>=11.0.0",
-    "faster-whisper>=0.10.0",
-    "pyannote.audio>=3.0.0",
+    "faster-whisper>=1.0.0",
+    "langchain>=0.1.0",
+    "langchain-community>=0.0.1",
+    "faiss-cpu>=1.7.4",
     "sentence-transformers>=2.2.0",
 ]
 
-[tool.setuptools]
-package-dir = {meetly = "."}
-packages = [
-    "meetly",
-    "meetly.api",
-    "meetly.audio",
-    "meetly.audio.integrations",
-    "meetly.audio.integrations.google_meet",
-    "meetly.audio.integrations.google_meet.media",
-    "meetly.audio.processing",
-    "meetly.audio.processing.ai",
-    "meetly.audio.processing.diarization",
-    "meetly.audio.processing.live_transcription",
-    "meetly.audio.processing.transcript",
-    "meetly.audio.recorder",
-    "meetly.core",
-    "meetly.llm",
+[tool.setuptools.packages.find]
+include = [
+    "meetly*",
+    "api*",
+    "audio*",
+    "core*",
+    "llm*",
 ]

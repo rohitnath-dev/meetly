@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from enum import Enum
-from typing import AsyncIterator, Optional
+from typing import TYPE_CHECKING, AsyncIterator, Optional
 
 from meetly.audio.processing.diarization.diarizer import Diarizer
 from meetly.audio.processing.transcript.assembler import (
@@ -12,9 +12,12 @@ from meetly.audio.processing.transcript.assembler import (
 )
 from meetly.audio.processing.live_transcription.transcriber import Transcriber
 from meetly.audio.recorder.models import AudioChunk
-from meetly.audio.processing.ai.qna import MeetingQnA
+from meetly.audio.recorder.source import AudioSource
 from meetly.audio.processing.ai.summarizer import MeetingSummarizer
 from meetly.llm import LLMClient
+
+if TYPE_CHECKING:
+    from meetly.audio.processing.ai.qna import MeetingQnA
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +68,9 @@ class Meeting:
         diarizer: Diarizer,
         assembler: TranscriptAssembler,
         llm: LLMClient,
+        audio_source: AudioSource | None = None,
+        provider: str = "local",
+        meeting_url: str | None = None,
     ) -> None:
         self._transcriber = transcriber
         self._diarizer = diarizer
@@ -72,11 +78,15 @@ class Meeting:
 
         self._summarizer = MeetingSummarizer(llm)
         self._qna_llm = llm
+        self._audio_source = audio_source
+        self._provider = provider
+        self._meeting_url = meeting_url
 
         self._state = MeetingState.IDLE
 
         self._transcript_task: Optional[asyncio.Task[None]] = None
         self._speaker_task: Optional[asyncio.Task[None]] = None
+        self._audio_task: Optional[asyncio.Task[None]] = None
 
         self._stop_lock = asyncio.Lock()
 
@@ -89,6 +99,14 @@ class Meeting:
     def running(self) -> bool:
         """Return whether the meeting is currently running."""
         return self._state is MeetingState.RUNNING
+
+    @property
+    def provider(self) -> str:
+        return self._provider
+
+    @property
+    def meeting_url(self) -> str | None:
+        return self._meeting_url
 
     @property
     def transcript(self) -> str:
@@ -145,6 +163,13 @@ class Meeting:
             )
 
             self._state = MeetingState.RUNNING
+
+            if self._audio_source is not None:
+                await self._audio_source.start()
+                self._audio_task = asyncio.create_task(
+                    self._consume_audio_source(),
+                    name="meetly-meeting-audio-source",
+                )
 
             logger.info("Meeting started.")
 
@@ -205,6 +230,7 @@ class Meeting:
             self._state = MeetingState.STOPPING
 
             try:
+                await self._stop_audio_source()
                 await self._transcriber.stop()
                 await self._diarizer.stop()
 
@@ -262,6 +288,8 @@ class Meeting:
                 "Cannot create Q&A for an empty transcript."
             )
 
+        from meetly.audio.processing.ai.qna import MeetingQnA
+
         return MeetingQnA(
             transcript=transcript,
             llm=self._qna_llm,
@@ -306,11 +334,27 @@ class Meeting:
 
         except asyncio.CancelledError:
             raise
-
         except Exception:
             logger.exception(
                 "Meeting transcript consumer failed."
             )
+            self._state = MeetingState.ERROR
+            raise
+
+    async def _consume_audio_source(self) -> None:
+        """Forward provider audio into the processing pipeline."""
+        if self._audio_source is None:
+            return
+
+        try:
+            async for audio in self._audio_source.stream():
+                if self._state is not MeetingState.RUNNING:
+                    break
+                await self.submit_audio(audio)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Meeting audio source failed.")
             self._state = MeetingState.ERROR
             raise
 
@@ -363,6 +407,8 @@ class Meeting:
         """
         Best-effort shutdown used when startup fails.
         """
+        await self._stop_audio_source()
+
         for component in (
             self._transcriber,
             self._diarizer,
@@ -375,6 +421,22 @@ class Meeting:
                     "Failed to stop %s during cleanup.",
                     type(component).__name__,
                 )
+
+    async def _stop_audio_source(self) -> None:
+        """Stop and await the provider stream before draining processors."""
+        task = self._audio_task
+        self._audio_task = None
+
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+        if self._audio_source is not None:
+            try:
+                await self._audio_source.stop()
+            except Exception:
+                logger.exception("Failed to stop the meeting audio source.")
 
     async def __aenter__(self) -> "Meeting":
         await self.start()
