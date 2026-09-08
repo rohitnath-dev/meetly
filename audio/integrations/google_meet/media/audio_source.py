@@ -44,15 +44,23 @@ class GoogleMeetAudioSource(AudioSource):
 
     def _frame_to_chunk(self, frame: object) -> AudioChunk:
         """Convert a frame supplied by the official media transport."""
-        array = frame.to_ndarray()
+        array = np.asarray(frame.to_ndarray())
 
         if array.ndim == 2:
-            array = np.asarray(array)
-            data = array.T.astype(np.int16).tobytes()
             channels = array.shape[0]
+            array = array.T
         else:
-            data = np.asarray(array).astype(np.int16).tobytes()
             channels = 1
+
+        if np.issubdtype(array.dtype, np.floating):
+            peak = float(np.max(np.abs(array))) if array.size else 0.0
+            if peak <= 1.0:
+                array = array * 32767.0
+
+        data = np.clip(array, -32768, 32767).astype(
+            np.int16,
+            copy=False,
+        ).tobytes()
 
         return AudioChunk(
             data=data,
